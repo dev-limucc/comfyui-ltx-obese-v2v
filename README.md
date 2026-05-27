@@ -1,47 +1,70 @@
-# LTX 2.3 — Obese Body V2V (9:16, 1080p)
+# LTX 2.3 — Obese Body V2V
 
-A ComfyUI workflow that transforms people in videos to appear obese/overweight using video-to-video inference with the **bodypositivity LoRA** on LTX Video 2.3. Works on **multiple people** in the same frame simultaneously.
+ComfyUI workflows that transform people in videos to appear obese/overweight using a **two-pass video-to-video pipeline** with the **bodypositivity LoRA** on LTX Video 2.3.
+
+Two variants included:
+
+| Workflow | Output | Use For |
+|----------|--------|---------|
+| `LTX 2.3 - Obese Body V2V (9-16 1080p).json` | 1080×1920 portrait | TikTok, Reels, Shorts |
+| `LTX 2.3 - Obese Body V2V (16-9 1080p).json` | 1920×1080 landscape | YouTube, streams, clips |
 
 ---
 
-## Preview
+## How It Works
 
-| Input | Output |
-|-------|--------|
-| Original video | Same video, people appear heavier |
+Two-pass pipeline (based on Discord community method — separate motion from appearance):
 
-The transformation preserves identity (same person, same background) by starting from the original video's latents and partially denoising with the bodypositivity LoRA active.
+```
+Source video
+    ↓  VAEEncodeTiled + AudioVAEEncode
+    ↓  LTXVConcatAVLatent  (video + audio joined)
+    ↓
+[Pass 1 — Motion Retention]   sigmas: 0.3 → 0.2 → 0.1 → 0
+  Very low noise — locks in motion structure.
+  Face, hair, background stay intact.
+    ↓
+[Pass 2 — Fat / Style]        sigmas: 0.9 → 0.8 → 0.7 → 0.6 → 0.5 → 0
+  Bodypositivity LoRA reshapes the body.
+  Works on the clean pass-1 latent → more effective than single pass.
+    ↓
+  LTXVSeparateAVLatent → LTXVAudioVAEDecode (audio preserved)
+    ↓
+  LTXVTiledVAEDecode → ImageScale → CreateVideo (with audio) → SaveVideo
+```
+
+**Why two passes?** A single pass forces a tradeoff: high sigma = fat but face changes, low sigma = face preserved but not fat. Two passes separates those concerns — Pass 1 locks the structure at low sigma, Pass 2 can then go aggressive with the LoRA without destroying the face.
+
+**Audio** is processed through the joint AV latent pipeline (`LTXVAudioVAEEncode → LTXVConcatAVLatent`), so the model is aware of audio context during generation. Audio is preserved in the output.
 
 ---
 
 ## Required Models
 
-Download all of these to your ComfyUI `models/` folders:
-
 ### Checkpoint
-| File | Destination | Download |
-|------|-------------|----------|
-| `ltx-2.3-22b-dev-fp8.safetensors` | `models/checkpoints/` | [Lightricks/LTX-Video-2B-0.9.7-distilled](https://huggingface.co/Lightricks/LTX-Video-2B-0.9.7-distilled) |
+| File | Destination |
+|------|-------------|
+| `ltx-2.3-22b-dev-fp8.safetensors` | `models/checkpoints/` |
 
 ```bash
-huggingface-cli download Lightricks/LTX-Video-2B-0.9.7 --include "ltx-2.3-22b-dev-fp8.safetensors" --local-dir models/checkpoints
+huggingface-cli download Lightricks/LTX-Video --include "ltx-2.3-22b-dev-fp8.safetensors" --local-dir models/checkpoints
 ```
 
 ### LoRAs
-| File | Destination | Download |
-|------|-------------|----------|
-| `ltx-2.3-22b-distilled-lora-384-1.1.safetensors` | `models/loras/` | [Lightricks/LTX-Video-2.3-Distilled](https://huggingface.co/Lightricks/LTX-Video-Distilled-Lora) |
-| `bodypositivity-ltx-2.3-rank32-step02750.safetensors` | `models/loras/` | [TheBurgstall/bodypositivity-ltx](https://huggingface.co/TheBurgstall/bodypositivity-ltx2.3) |
+| File | Destination |
+|------|-------------|
+| `ltx-2.3-22b-distilled-lora-384-1.1.safetensors` | `models/loras/` |
+| `bodypositivity-ltx-2.3-rank32-step02750.safetensors` | `models/loras/` |
 
 ```bash
 huggingface-cli download Lightricks/LTX-Video-Distilled-Lora --include "ltx-2.3-22b-distilled-lora-384-1.1.safetensors" --local-dir models/loras
 huggingface-cli download TheBurgstall/bodypositivity-ltx2.3 --include "*.safetensors" --local-dir models/loras
 ```
 
-### Text Encoder (Gemma)
-| File | Destination | Download |
-|------|-------------|----------|
-| `gemma_3_12B_it_fp4_mixed.safetensors` | `models/text_encoders/` | [Lightricks/LTX-Video](https://huggingface.co/Lightricks/LTX-Video) |
+### Text Encoder
+| File | Destination |
+|------|-------------|
+| `gemma_3_12B_it_fp4_mixed.safetensors` | `models/text_encoders/` |
 
 ```bash
 huggingface-cli download Lightricks/LTX-Video --include "gemma_3_12B_it_fp4_mixed.safetensors" --local-dir models/text_encoders
@@ -51,158 +74,98 @@ huggingface-cli download Lightricks/LTX-Video --include "gemma_3_12B_it_fp4_mixe
 
 ## Required Custom Nodes
 
-Install via ComfyUI Manager or manually:
-
 | Node Pack | Required For |
 |-----------|-------------|
-| [ComfyUI-VideoHelperSuite (VHS)](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | `VHS_LoadVideo` — trim controls |
-| [ComfyUI-LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) | `LTXAVTextEncoderLoader`, `LTXVConditioning`, `LTXVTiledVAEDecode` |
-| Built-in ComfyUI core | All other nodes |
+| [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | `VHS_LoadVideo`, `CreateVideo`, `SaveVideo` |
+| [ComfyUI-LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) | `LTXVTiledVAEDecode`, `LTXVAudioVAEEncode/Decode`, `LTXVConcatAVLatent`, `LTXVSeparateAVLatent`, `LTXAVTextEncoderLoader`, `LTXVConditioning`, `LowVRAMCheckpointLoader` |
 
 ---
 
 ## How to Use
 
-1. **Load the workflow** — drag `LTX 2.3 - Obese Body V2V (9-16 1080p).json` into ComfyUI
-2. **Set your video** — click the `Load Video (+ Trim)` node and select your video file
-3. **Set audio source** — set the same video file in the `Load Video (Audio)` node
-4. **Queue prompt** — click Run. Output saves to `ComfyUI/output/LTX-2.3/Obese-V2V/`
+1. **Load the workflow** — drag the `.json` file into ComfyUI (or use Load → browse)
+2. **Select your video** — click the `Load Video (+ Trim)` node, pick your file
+3. **Queue** — hit Run. Output saves to `ComfyUI/output/LTX-2.3/Obese-V2V/`
+
+Use the **9-16** workflow for portrait/vertical video, **16-9** for landscape/horizontal.
+
+---
+
+## Strength Controls
+
+### Fat Strength — Pass 2 ManualSigmas
+
+| Level | Sigmas | Notes |
+|-------|--------|-------|
+| Subtle | `0.5, 0.4, 0.3, 0.0` | Slight weight gain, maximum preservation |
+| Moderate | `0.75, 0.65, 0.55, 0.45, 0.0` | Clearly heavier |
+| **Strong (default)** | `0.9, 0.8, 0.7, 0.6, 0.5, 0.0` | Clearly obese |
+| Extreme | `0.95, 0.85, 0.75, 0.65, 0.5, 0.0` | Maximum fat, some face drift |
+
+### Motion Lock — Pass 1 ManualSigmas
+Keep this **low**. Raising it above 0.4 defeats the purpose of two-pass.
+
+| Level | Sigmas |
+|-------|--------|
+| **Default** | `0.3, 0.2, 0.1, 0.0` |
+| Slightly stronger lock | `0.4, 0.3, 0.2, 0.0` |
+
+### LoRA Strength (Obese LoRA node)
+Default: **1.15**. Range: 0.8–1.3. Higher = fatter but more artifact risk.
 
 ---
 
 ## Trim Controls
 
-The `VHS_LoadVideo` node (top-left) has two trim parameters:
-
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `skip_first_frames` | `0` | Start frame (0 = beginning of video) |
-| `frame_load_cap` | `0` | How many frames to load (0 = entire video) |
+| `frame_load_cap` | `0` | Frames to load (0 = entire video) |
+| `skip_first_frames` | `0` | Start frame offset |
 
-**Frame to time conversion at 24fps:**
-- 120 frames = 5 seconds
-- 240 frames = 10 seconds
-- 480 frames = 20 seconds
+At 24fps: 120 frames = 5s · 240 = 10s · 480 = 20s
 
-**For long videos** (manual chunking):
-1. Set `frame_load_cap = 240` (10 second chunks)
-2. Run: `skip_first_frames = 0` → chunk 1
-3. Run: `skip_first_frames = 240` → chunk 2
-4. Run: `skip_first_frames = 480` → chunk 3
-5. Stitch chunks in any video editor (DaVinci Resolve, CapCut, etc.)
+**Test first:** Use `frame_load_cap=120` (5 seconds) to verify results before running the full video.
 
 ---
 
-## Obese Strength Control
+## Expected Performance (RTX 5060 Ti 16GB)
 
-Adjust the `ManualSigmas` node to control how extreme the body transformation is:
+| Video length | Approx time |
+|-------------|-------------|
+| 5s (120 frames) | ~5–7 min |
+| 10s (240 frames) | ~8–12 min |
+| 20s (480 frames) | ~15–20 min |
 
-| Level | Sigma Values | Description |
-|-------|-------------|-------------|
-| Subtle | `0.421875, 0.0` | Slight weight increase, maximum identity preservation |
-| **Moderate** (default) | `0.725, 0.421875, 0.0` | Clear obese transformation, good identity |
-| Strong | `0.909375, 0.725, 0.421875, 0.0` | Heavy transformation, some identity drift |
-| Extreme | `1.0, 0.909375, 0.725, 0.421875, 0.0` | Maximum effect, more identity drift |
-
-> **Rule:** Higher starting sigma = more body transformation but more deviation from original. Start with default, go stronger if needed.
-
----
-
-## Workflow Architecture
-
-```
-VHS_LoadVideo (trim) ──────────────────────────────────────────────────────┐
-                                                                           ↓
-LoadVideo (audio) → GetVideoComponents → fps                      ScaleMax (768px)
-                                      → audio ──────────────────→    ↓
-                                      → fps ──→ LTXVConditioning  ResizeMult(×32)
-                                                                       ↓
-                                                                  VAEEncodeTiled
-                                                                       ↓ (latents)
-LowVRAMCheckpointLoader                                         SamplerCustomAdvanced ←─────┐
-    → LoraLoaderModelOnly (distilled, 0.5)                             ↑                    │
-    → LoraLoaderModelOnly (bodypositivity, 1.0)                        │                    │
-    → CFGGuider ──────────────────────────────────────────────── guider│                    │
-                                                                        │                    │
-LTXAVTextEncoderLoader (Gemma)                              RandomNoise─┤                    │
-    → CLIPTextEncode (positive: "bodypositivity, obese...")  KSamplerSelect (euler_anc_cfg_pp)│
-    → CLIPTextEncode (negative)                              ManualSigmas (0.725, 0.421875, 0)┘
-    → LTXVConditioning ──────→ CFGGuider
-                                                                       ↓
-                                                              LTXVTiledVAEDecode
-                                                                       ↓
-                                                              ImageScale (1080×1920)
-                                                                       ↓
-                                                              CreateVideo (+ audio + fps)
-                                                                       ↓
-                                                              SaveVideo → output/
-```
-
----
-
-## Optimization Tips
-
-### Speed (RTX 5060 Ti 16GB or similar)
-
-| Optimization | Impact | Setting |
-|-------------|--------|---------|
-| **LowVRAMCheckpointLoader** | Prevents OOM with 27GB model on 16GB VRAM | Already used in workflow |
-| **SamplerCustomAdvanced** | 3-4x faster than LTXVLoopingSampler | Already used |
-| **3-step sigmas** | ~3 model passes total | Default: `0.725, 0.421875, 0.0` |
-| **768px processing** | Avoids VRAM spike at high res | Already set |
-| **1080p upscale at output** | Upscale after decode, not during | Already set (ImageScale node) |
-| **euler_ancestral_cfg_pp** | Best quality-per-step ratio | Already set |
-| **FP8 checkpoint** | Half the VRAM of FP16 | ltx-2.3-22b-dev-fp8 |
-
-### Expected performance on RTX 5060 Ti (16GB)
-- 5-second clip (120 frames, 768px) → ~90-150 seconds (vs ~900s before optimization)
-- 10-second clip (240 frames) → ~180-300 seconds
-
-### If still slow
-- Reduce to 2-step sigmas: `0.421875, 0.0`
-- Reduce frame count: set `frame_load_cap = 120` (5s chunks)
-- Ensure CUDA is used: check Task Manager GPU utilization during generation
+Processing resolution: **960px** (longest dimension) → upscaled to 1080p at output.
 
 ---
 
 ## Troubleshooting
 
-**Different person in output / identity drift**
-- Lower the starting sigma (e.g., `0.421875, 0.0` instead of `0.725, ...`)
-- bodypositivity LoRA at 1.0 is intentional for strong effect — reduce to 0.7-0.8 if too extreme
+**Not fat enough**
+- Raise Pass 2 first sigma (e.g. `0.95` start)
+- Raise LoRA strength toward 1.2–1.3
 
-**OOM / out of memory error**
-- The workflow uses `LowVRAMCheckpointLoader` — ensure you're not accidentally using `CheckpointLoaderSimple`
-- Reduce `frame_load_cap` to process shorter chunks (120 = 5s)
+**Face / hair changing**
+- Lower Pass 2 first sigma (e.g. `0.75` start)
+- Keep Pass 1 sigmas low (`0.3, 0.2, 0.1, 0.0`)
 
-**Audio not in output**
-- Make sure the same video file is loaded in BOTH `VHS_LoadVideo` AND `Load Video (Audio)` nodes
-- `GetVideoComponents` extracts fps and audio track
+**Background filling with extra people**
+- Already handled in negative prompt — if it recurs, lower Pass 2 start sigma
 
-**Black or corrupt output frames**
-- Usually caused by sigma values starting too high (>1.0). Stay within the presets in the Obese Strength table.
+**OOM / out of memory**
+- Reduce processing resolution: change `960` → `832` in the `ImageScaleToMaxDimension` node
+- Reduce `frame_load_cap` to process shorter chunks
 
----
-
-## Parameters Reference
-
-| Node | Key Parameter | Default | Notes |
-|------|--------------|---------|-------|
-| VHS_LoadVideo | skip_first_frames | 0 | Start frame |
-| VHS_LoadVideo | frame_load_cap | 0 | 0 = all frames |
-| VHS_LoadVideo | force_rate | 24 | Output FPS |
-| LoraLoaderModelOnly (distilled) | strength | 0.5 | Enables 3-9 step inference |
-| LoraLoaderModelOnly (bodypositivity) | strength | 1.0 | Obese effect intensity |
-| ManualSigmas | sigmas | `0.725, 0.421875, 0.0` | Transformation strength |
-| CFGGuider | cfg | 1 | Keep at 1 for distilled |
-| ImageScaleToMaxDimension | max_dimension | 768 | Processing resolution cap |
-| ImageScale | width/height | 1080/1920 | Final output resolution |
-| LTXVTiledVAEDecode | tile_sample_min_width/height | 2×2 tiles, overlap 6 | VRAM-efficient decode |
+**Blurry decode / tile seam**
+- Portrait uses **1h×2v** tiling (no vertical seam through face)
+- Landscape uses **2h×1v** tiling (no horizontal seam through frame)
+- These are already set correctly per workflow
 
 ---
 
 ## License
 
-Workflow JSON: MIT  
-bodypositivity LoRA: [TheBurgstall/bodypositivity-ltx2.3](https://huggingface.co/TheBurgstall/bodypositivity-ltx2.3) — check HuggingFace for license  
-LTX Video 2.3 model: [Lightricks Research License](https://huggingface.co/Lightricks/LTX-Video)
+Workflow JSON: MIT
+bodypositivity LoRA: [TheBurgstall/bodypositivity-ltx2.3](https://huggingface.co/TheBurgstall/bodypositivity-ltx2.3)
+LTX Video 2.3: [Lightricks Research License](https://huggingface.co/Lightricks/LTX-Video)
